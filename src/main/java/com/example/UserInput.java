@@ -11,6 +11,7 @@ import java.lang.invoke.MethodHandles;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class UserInput implements AutoCloseable {
+    private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private final BufferedReader reader;
     private ConcurrentLinkedDeque<String> lines;
@@ -41,12 +42,14 @@ public class UserInput implements AutoCloseable {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     String s = reader.readLine();
+                    log.debug("\n // s: " + s);
                     lines.add(s);
                 } catch (final IOException e) {
-                    e.printStackTrace();
+                    log.debug("", e);
                     throw new RuntimeException(e);
                 }
             }
+            log.info("UserInput daemon thread has been interrupted.");
         }
     }
 }

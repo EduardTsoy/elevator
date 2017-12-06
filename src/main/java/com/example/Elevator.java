@@ -71,7 +71,7 @@ public class Elevator {
 
     @Override
     public String toString() {
-        return "com.example.Elevator{" +
+        return "Elevator{" +
                 "floors=" + maxFloor +
                 ", height=" + height +
                 ", speed=" + speed +
@@ -80,6 +80,7 @@ public class Elevator {
     }
 
     synchronized public ElevatorState pollCurrentState() {
+        // log.debug("Elevator.pollCurrentState()");
         ElevatorState newState;
         while ((newState = stateDelayQueue.poll()) != null) {
             newState(newState);
@@ -99,19 +100,19 @@ public class Elevator {
     }
 
     public void callTo(final int targetFloor) {
-        log.debug("com.example.Elevator.callTo(" + targetFloor + ")");
+        log.debug("Elevator.callTo(" + targetFloor + ")");
         setTargetFloor(targetFloor);
         programMovement();
     }
 
     public void rideTo(final int targetFloor) {
-        log.debug("com.example.Elevator.rideTo(" + targetFloor + ")");
+        log.debug("Elevator.rideTo(" + targetFloor + ")");
         setTargetFloor(targetFloor);
         programMovement();
     }
 
     private void programMovement() {
-        log.debug("com.example.Elevator.programMovement()");
+        log.debug("Elevator.programMovement() started...");
 
         final ElevatorState[] queued = new ElevatorState[stateDelayQueue.size()];
         stateDelayQueue.toArray(queued);
@@ -127,6 +128,7 @@ public class Elevator {
             plannedTime = getCurrentInstant();
         }
         int programFloor = tailState.getFloor();
+        boolean addDoorsOpeningInTheEnd = true;
         if (programFloor == getTargetFloor()) {
             if (queued.length == 1
                     && pollCurrentState().getDoorsState() == DoorsState.OPENED
@@ -135,6 +137,8 @@ public class Elevator {
                 if (removalResult) {
                     log.debug("Removed the last future state successfully");
                 }
+            } else if (queued.length >= 2) {
+                addDoorsOpeningInTheEnd = false;
             }
         } else {
             final double plannedSpeed = (programFloor < getTargetFloor())
@@ -149,21 +153,28 @@ public class Elevator {
             }
             final int plusOneOrMinusOne = Constants.signum(plannedSpeed);
             while (programFloor != getTargetFloor()) {
+                if (programFloor < getMinFloor() || programFloor > getMaxFloor()) {
+                    throw new IllegalStateException("Internal error: The elevator supposedly went in a wrong direction");
+                }
+                plannedTime = plannedTime.plusNanos(nanosPerFloor);
                 stateDelayQueue.add(new ElevatorState(
                         plannedTime, programFloor, DoorsState.CLOSED, plannedSpeed));
-                plannedTime = plannedTime.plusNanos(nanosPerFloor);
                 programFloor += plusOneOrMinusOne;
             }
             plannedTime = plannedTime.plusNanos(1);
             stateDelayQueue.add(new ElevatorState(
                     plannedTime, programFloor, DoorsState.CLOSED, 0.0d));
         }
-        plannedTime = plannedTime.plusMillis(DOORS_OPENING_TIME_IN_MILLIS);
-        stateDelayQueue.add(new ElevatorState(
-                plannedTime, programFloor, DoorsState.OPENED, 0.0d));
-        plannedTime = plannedTime.plusNanos(getTimeoutInNanos());
-        stateDelayQueue.add(new ElevatorState(
-                plannedTime, programFloor, DoorsState.CLOSED, 0.0d));
+        if (addDoorsOpeningInTheEnd) {
+            plannedTime = plannedTime.plusMillis(DOORS_OPENING_TIME_IN_MILLIS)
+                                     .plusNanos(1); // It is important to add at least 1 nanosecond for proper sorting
+            stateDelayQueue.add(new ElevatorState(
+                    plannedTime, programFloor, DoorsState.OPENED, 0.0d));
+            plannedTime = plannedTime.plusNanos(getTimeoutInNanos());
+            stateDelayQueue.add(new ElevatorState(
+                    plannedTime, programFloor, DoorsState.CLOSED, 0.0d));
+        }
+        log.debug("...Elevator.programMovement() finished");
     }
 
     public double getTimeoutInSeconds() {
@@ -186,7 +197,7 @@ public class Elevator {
     }
 
     /* -------------------------------------
-     * Standard getters and setters for com.example.Elevator class
+     * Standard getters and setters for Elevator class
      */
 
     public int getMinFloor() {
@@ -207,6 +218,10 @@ public class Elevator {
 
     public long getTimeoutInNanos() {
         return timeoutInNanos;
+    }
+
+    public DelayQueue<ElevatorState> getStateDelayQueue() {
+        return stateDelayQueue;
     }
 
 }

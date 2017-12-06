@@ -13,18 +13,24 @@ class Passenger {
     private Elevator elevator;
     private Integer standingFloor;
     private Integer targetFloor;
-    private PassengerState state;
+    private PassengerStatus status;
 
     public Passenger() {
         elevator = null;
         standingFloor = 1;
         targetFloor = null;
-        state = PassengerState.OUTSIDE_ELEVATOR_NOT_WAITING;
+        status = PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING;
     }
 
-    /*
-     * This is NOT a POJO - there is some logic here
-     */
+    @Override
+    public String toString() {
+        return "Passenger{" +
+                "elevator=" + elevator +
+                ", standingFloor=" + standingFloor +
+                ", targetFloor=" + targetFloor +
+                ", status=" + status +
+                '}';
+    }
 
     public void goIntoElevator(final Elevator elevator) {
         log.debug("goIntoElevator()");
@@ -45,7 +51,7 @@ class Passenger {
         }
         this.elevator = elevator;
         standingFloor = null;
-        state = PassengerState.INSIDE_ELEVATOR;
+        status = PassengerStatus.INSIDE_ELEVATOR;
     }
 
     public void memorizeTargetFloor(final int floor) {
@@ -62,7 +68,7 @@ class Passenger {
         this.standingFloor = floor;
         this.elevator = null;
         this.targetFloor = null;
-        state = PassengerState.OUTSIDE_ELEVATOR_NOT_WAITING;
+        status = PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING;
     }
 
     public Optional<Elevator> getElevator() {
@@ -85,11 +91,11 @@ class Passenger {
         this.targetFloor = targetFloor;
     }
 
-    public PassengerState getState() {
-        return state;
+    public PassengerStatus getStatus() {
+        return status;
     }
 
-    public void setState(final PassengerState state) {
-        this.state = state;
+    public void setStatus(final PassengerStatus status) {
+        this.status = status;
     }
 }

@@ -1,5 +1,10 @@
 package com.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nonnull;
+import java.lang.invoke.MethodHandles;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -9,19 +14,21 @@ import java.util.concurrent.TimeUnit;
 
 import static com.example.Constants.NANOS_PER_SECOND;
 
-/* -------------------------------
- * ElevatorState class (immutable)
+/**
+ * (immutable)
  */
-class ElevatorState implements Delayed {
+public class ElevatorState implements Delayed {
+    private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+
     private final Instant plannedInstant;
     private final int floor;
     private final DoorsState doorsState;
-    private final double currentSpeed;
+    private final double speed;
 
     public ElevatorState(final Instant plannedInstant,
                          final int floor,
                          final DoorsState doorsState,
-                         final double currentSpeed) {
+                         final double speed) {
         if (Math.abs(plannedInstant.getEpochSecond() - Instant.now().getEpochSecond()) > 60 * 60) {
             throw new IllegalArgumentException(
                     "Possible error: Attempted to plan a state more than an hour from the current moment");
@@ -35,10 +42,10 @@ class ElevatorState implements Delayed {
 
         this.doorsState = doorsState;
 
-        if (doorsState == DoorsState.OPENED && Constants.signum(currentSpeed) != 0) {
+        if (doorsState == DoorsState.OPENED && Constants.signum(speed) != 0) {
             throw new IllegalArgumentException("An elevator should not be with open doors and non-zero speed");
         }
-        this.currentSpeed = currentSpeed;
+        this.speed = speed;
     }
 
     @Override
@@ -55,7 +62,7 @@ class ElevatorState implements Delayed {
         if (floor != that.floor) {
             return false;
         }
-        if (Double.compare(that.currentSpeed, currentSpeed) != 0) {
+        if (Double.compare(that.speed, speed) != 0) {
             return false;
         }
         if (plannedInstant != null ? !plannedInstant.equals(that.plannedInstant) : that.plannedInstant != null) {
@@ -71,7 +78,7 @@ class ElevatorState implements Delayed {
         result = plannedInstant != null ? plannedInstant.hashCode() : 0;
         result = 31 * result + floor;
         result = 31 * result + (doorsState != null ? doorsState.hashCode() : 0);
-        temp = Double.doubleToLongBits(currentSpeed);
+        temp = Double.doubleToLongBits(speed);
         result = 31 * result + (int) (temp ^ (temp >>> 32));
         return result;
     }
@@ -84,12 +91,12 @@ class ElevatorState implements Delayed {
                                           .truncatedTo(ChronoUnit.MILLIS) +
                 ", floor=" + floor +
                 ", doorsState=" + doorsState +
-                ", currentSpeed=" + currentSpeed +
+                ", speed=" + speed +
                 '}';
     }
 
     @Override
-    public long getDelay(final TimeUnit unit) {
+    public long getDelay(@Nonnull final TimeUnit unit) {
         final Instant now = Instant.now();
         final long differenceInSeconds = plannedInstant.getEpochSecond() - now.getEpochSecond();
         final long result;
@@ -125,12 +132,18 @@ class ElevatorState implements Delayed {
     }
 
     @Override
-    public int compareTo(final Delayed o) {
-        return Long.compare(this.getDelay(TimeUnit.NANOSECONDS), o.getDelay(TimeUnit.NANOSECONDS));
+    public int compareTo(final Delayed that) {
+        int result = Long.compare(this.getDelay(TimeUnit.NANOSECONDS), that.getDelay(TimeUnit.NANOSECONDS));
+        if (result == 0) {
+            log.warn("These states are planned for exactly the same instant of time (equal even in nanos):" +
+                    "\n // " + this +
+                    "\n // " + that);
+        }
+        return result;
     }
 
-    /*
-     * Getters for ElevatorState class
+    /* --------
+     * Getters
      */
 
     public Instant getPlannedInstant() {
@@ -145,7 +158,7 @@ class ElevatorState implements Delayed {
         return doorsState;
     }
 
-    public double getCurrentSpeed() {
-        return currentSpeed;
+    public double getSpeed() {
+        return speed;
     }
 }

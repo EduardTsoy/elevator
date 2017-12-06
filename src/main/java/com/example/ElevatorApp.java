@@ -20,14 +20,14 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
             "  --timeout=<how much time the elevator waits with open doors, in seconds>\n" +
             "\n" +
             " Command-line example:\n" +
-            "  java com.example.Elevator --floors=15 --height=2 --speed=2.5 --timeout=4.5\n" +
+            "  java -jar elevator.jar --floors=15 --height=2 --speed=2.5 --timeout=4.5\n" +
             "\n" +
             " If you run the application from IntelliJ IDEA, it is recommended to:\n" +
             "  - go to menu Run -> Edit Configurations -> check Single instance only\n" +
             "\n";
 
     private static final String RUNTIME_INSTRUCTIONS = "\n" +
-            " Welcome to the com.example.Elevator simulation!\n" +
+            " Welcome to the Elevator simulation!\n" +
             "\n" +
             "  - If you are not in the elevator yet, press [ENTER] to call the elevator.\n" +
             "\n" +
@@ -40,17 +40,15 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
             "  - or stop the application by pressing CTRL+C\n" +
             "\n";
 
-    private final String[] args;
     private final UserInput userInput;
     private final UserOutput userOutput;
     private final Elevator elevator;
     private final Passenger passenger;
 
     public ElevatorApp(final String[] args) throws IOException {
-        this.args = args;
         userInput = new UserInput(System.in);
         userOutput = new UserOutput(System.out);
-        userOutput.println(RUNTIME_INSTRUCTIONS);
+        userOutput.writeString(RUNTIME_INSTRUCTIONS);
         elevator = createElevatorFromArgs(args);
         elevator.addListener(this::stateChanged);
         passenger = new Passenger();
@@ -86,11 +84,7 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                 paramValue = param[1];
             } else if (param.length == 1) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("-")) {
-                    if ("debug".equals(paramName)) {
-                        paramValue = Boolean.TRUE.toString().toLowerCase();
-                    } else {
-                        throw new ElevatorException("Value not provided for command-line parameter: " + paramName);
-                    }
+                    paramValue = Boolean.TRUE.toString().toLowerCase();
                 } else {
                     paramValue = args[++i];
                 }
@@ -99,38 +93,40 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                         " (" + arg + ")");
             }
             switch (paramName) {
+                case "help":
+                    userOutput.writeString(LAUNCH_INSTRUCTIONS);
+                    break;
                 case "debug":
                     boolean debugEnabled = Boolean.parseBoolean(paramValue);
                     ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
                             .getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
                     root.setLevel(ch.qos.logback.classic.Level.DEBUG);
-                    log.debug("debug = " + debugEnabled);
+                    log.info("debug = " + debugEnabled);
                     break;
                 case "floors":
                 case "f":
                     floors = Integer.parseUnsignedInt(paramValue);
-                    log.debug("floors = " + floors);
+                    log.info("floors = " + floors);
                     break;
                 case "height":
                 case "h":
                     height = Double.parseDouble(paramValue);
-                    log.debug("height = " + height);
+                    log.info("height = " + height);
                     break;
                 case "speed":
                 case "s":
                     speed = Double.parseDouble(paramValue);
-                    log.debug("speed = " + speed);
+                    log.info("speed = " + speed);
                     break;
                 case "timeout":
                 case "t":
                 case "wait":
                 case "w":
                     timeout = Double.parseDouble(paramValue);
-                    log.debug("timeout = " + timeout);
+                    log.info("timeout = " + timeout);
                     break;
                 default:
-                    // Unknown command-line parameter
-                    // Do nothing
+                    // Ignore any unknown command-line parameters
                     break;
             }
         }
@@ -144,32 +140,30 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
             String userCommand = null;
             do {
                 Thread.sleep(10);
-                if ("exit".equals(userCommand) ||
-                        "quit".equals(userCommand) ||
-                        "e".equals(userCommand) ||
-                        "q".equals(userCommand)) {
-                    break;
-                }
                 try {
                     if (userCommand != null) {
                         userCommand = userCommand.toLowerCase();
-                        final Optional<Integer> passengerFloor = passenger.getStandingFloor();
                         final ElevatorState elevatorState = elevator.pollCurrentState();
-                        switch (passenger.getState()) {
+                        final Optional<Integer> passengerFloor = passenger.getStandingFloor();
+                        switch (passenger.getStatus()) {
                             case OUTSIDE_ELEVATOR_WAITING:
                                 break;
                             case OUTSIDE_ELEVATOR_NOT_WAITING:
                                 if (!passengerFloor.isPresent()) { // Sanity check
                                     throw new IllegalStateException(
-                                            "Internal error: The passenger is waiting, but we don't know where");
+                                            "Internal error: We've lost sight of the passenger (" +
+                                                    passenger + ")");
                                 }
                                 if (Objects.equals(elevatorState.getFloor(), passengerFloor.get())
                                         && elevatorState.getDoorsState() == DoorsState.OPENED) {
                                     // Going into the elevator urgently
+                                    userOutput.writeString("The passenger urgently enters the elevator");
                                     passenger.goIntoElevator(elevator);
                                 } else {
+                                    userOutput.writeString(
+                                            "The passenger called an elevator from the floor# " + passengerFloor.get());
                                     elevator.callTo(passengerFloor.get());
-                                    passenger.setState(PassengerState.OUTSIDE_ELEVATOR_WAITING);
+                                    passenger.setStatus(PassengerStatus.OUTSIDE_ELEVATOR_WAITING);
                                 }
                                 break;
                             case INSIDE_ELEVATOR:
@@ -178,28 +172,39 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                                     floor = Integer.parseInt(userCommand);
                                 } catch (final NumberFormatException e) {
                                     throw new ElevatorException("Hint: You are inside the elevator." +
-                                            " Enter the number of floor where you want to go.");
+                                            " Enter the number of floor where you want to go." +
+                                            " (can't understand your command: " + userCommand + ")");
                                 }
                                 if (Objects.equals(elevatorState.getFloor(), floor)
                                         && elevatorState.getDoorsState() == DoorsState.OPENED) {
                                     // Going out of the elevator urgently
+                                    userOutput.writeString("The passenger urgently goes out of the elevator");
                                     passenger.goOutToFloor(floor);
                                 } else {
                                     elevator.rideTo(floor);
+                                    userOutput.writeString("The passenger has chosen to go to floor # " + floor);
                                     passenger.memorizeTargetFloor(floor);
                                 }
                                 break;
                             default:
                                 throw new IllegalStateException(
-                                        "Internal error: Unknown passenger state (" + passenger.getState() + ")");
+                                        "Internal error: Unknown passenger status:" + passenger.getStatus());
                         }
                     }
                 } catch (final ElevatorException e) {
-                    userOutput.println(e.getMessage());
+                    userOutput.writeException(e);
                 }
                 elevator.pollCurrentState();
                 userCommand = userInput.nextLine();
-            } while (true);
+                log.debug("userCommand: {}, passenger: {}", userCommand, passenger);
+                if (passenger.getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING
+                        && elevator.getStateDelayQueue().size() == 0) {
+                    throw new IllegalStateException("Internal error: The elevator is stuck");
+                }
+            } while (!(("exit".equals(userCommand) ||
+                    "quit".equals(userCommand) ||
+                    "e".equals(userCommand) ||
+                    "q".equals(userCommand))));
             result = 0;
         } catch (final InterruptedException e) {
             result = 0;
@@ -209,15 +214,26 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
 
     private void stateChanged(final ElevatorState previousState,
                               final ElevatorState newState) {
-        userOutput.println(newState.toString());
-        // TODO: Make state output more user-friendly
+        switch (Constants.compareDoubles(newState.getSpeed(), 0.0f)) {
+            case 0:
+                userOutput.writeString("The elevator is at floor # " + newState.getFloor() +
+                        ", " + newState.getDoorsState().getDescription());
+                break;
+            case -1:
+                userOutput.writeString("The elevator is going down, now passing the floor # " + newState.getFloor());
+                break;
+            case 1:
+                userOutput.writeString("The elevator is going up, now passing the floor # " + newState.getFloor());
+                break;
+        }
 
         if (newState.getDoorsState() == DoorsState.OPENED) {
             Optional<Integer> passengerStandingFloor = passenger.getStandingFloor();
             if (passengerStandingFloor.isPresent()
                     && passengerStandingFloor.get().equals(newState.getFloor())
-                    && passenger.getState() == PassengerState.OUTSIDE_ELEVATOR_WAITING) {
+                    && passenger.getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING) {
                 // Going into the elevator as planned
+                userOutput.writeString("The passenger enters the elevator");
                 passenger.goIntoElevator(elevator);
             } else {
                 Optional<Elevator> passengerElevator = passenger.getElevator();
@@ -227,6 +243,7 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                         && passengerTargetFloor.isPresent()
                         && passengerTargetFloor.get().equals(newState.getFloor())) {
                     // Going out of the elevator as planned
+                    userOutput.writeString("The passenger goes out of the elevator");
                     passenger.goOutToFloor(newState.getFloor());
                 }
             }
@@ -234,14 +251,22 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
     }
 
     public static void main(String[] args) {
-        try {
-            final int exitCode = new ElevatorApp(args).call();
-            System.exit(exitCode);
+        int exitCode;
+        try (final ElevatorApp elevatorApp = new ElevatorApp(args)) {
+            exitCode = elevatorApp.call();
         } catch (final ElevatorException e) {
-            System.out.println(e.getMessage());
+            log.error(e.getMessage());
+            exitCode = 2;
         } catch (final Exception e) {
+            log.error("Some error occurred: ", e);
             e.printStackTrace();
-            System.exit(1);
+            exitCode = 1;
         }
+        if (exitCode != 0) {
+            System.out.println(LAUNCH_INSTRUCTIONS);
+            System.out.println(RUNTIME_INSTRUCTIONS);
+        }
+        System.exit(exitCode);
     }
 }
+

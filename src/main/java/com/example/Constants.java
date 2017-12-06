@@ -2,7 +2,7 @@ package com.example;
 
 public interface Constants {
 
-    double DOUBLE_DELTA = 0.000001f;
+    double DOUBLE_DELTA = 0.001f;
     long NANOS_PER_SECOND = 1000L * 1000L * 1000L;
     int MIN_FLOORS = 5;
     int MAX_FLOORS = 20;
