@@ -3,11 +3,13 @@ package com.example;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nonnull;
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class ElevatorApp implements Callable<Integer>, AutoCloseable {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -43,7 +45,7 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
     private final UserInput userInput;
     private final UserOutput userOutput;
     private final Elevator elevator;
-    private final Passenger passenger;
+    private final ConcurrentLinkedDeque<PassengerState> passengerState;
 
     public ElevatorApp(final String[] args) throws IOException {
         userInput = new UserInput(System.in);
@@ -51,7 +53,13 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
         userOutput.writeString(RUNTIME_INSTRUCTIONS);
         elevator = createElevatorFromArgs(args);
         elevator.addListener(this::stateChanged);
-        passenger = new Passenger();
+        passengerState = new ConcurrentLinkedDeque<>();
+        passengerState.addFirst(new PassengerState(
+                null,
+                1,
+                null,
+                PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING
+        ));
     }
 
     @Override
@@ -144,6 +152,7 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                     if (userCommand != null) {
                         userCommand = userCommand.toLowerCase();
                         final ElevatorState elevatorState = elevator.pollCurrentState();
+                        final PassengerState passenger = getPassengerState();
                         final Optional<Integer> passengerFloor = passenger.getStandingFloor();
                         switch (passenger.getStatus()) {
                             case OUTSIDE_ELEVATOR_WAITING:
@@ -152,18 +161,19 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                                 if (!passengerFloor.isPresent()) { // Sanity check
                                     throw new IllegalStateException(
                                             "Internal error: We've lost sight of the passenger (" +
-                                                    passenger + ")");
+                                                    this.passengerState + ")");
                                 }
                                 if (Objects.equals(elevatorState.getFloor(), passengerFloor.get())
                                         && elevatorState.getDoorsState() == DoorsState.OPENED) {
                                     // Going into the elevator urgently
                                     userOutput.writeString("The passenger urgently enters the elevator");
-                                    passenger.goIntoElevator(elevator);
+                                    changePassengerState(passenger.goIntoElevator(elevator));
                                 } else {
                                     userOutput.writeString(
                                             "The passenger called an elevator from the floor# " + passengerFloor.get());
                                     elevator.callTo(passengerFloor.get());
-                                    passenger.setStatus(PassengerStatus.OUTSIDE_ELEVATOR_WAITING);
+                                    changePassengerState(passenger
+                                            .changeStatus(PassengerStatus.OUTSIDE_ELEVATOR_WAITING));
                                 }
                                 break;
                             case INSIDE_ELEVATOR:
@@ -179,11 +189,11 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                                         && elevatorState.getDoorsState() == DoorsState.OPENED) {
                                     // Going out of the elevator urgently
                                     userOutput.writeString("The passenger urgently goes out of the elevator");
-                                    passenger.goOutToFloor(floor);
+                                    changePassengerState(passenger.goOutToFloor(floor));
                                 } else {
                                     elevator.rideTo(floor);
                                     userOutput.writeString("The passenger has chosen to go to floor # " + floor);
-                                    passenger.memorizeTargetFloor(floor);
+                                    changePassengerState(passenger.memorizeTargetFloor(floor));
                                 }
                                 break;
                             default:
@@ -196,8 +206,8 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                 }
                 elevator.pollCurrentState();
                 userCommand = userInput.nextLine();
-                log.debug("userCommand: {}, passenger: {}", userCommand, passenger);
-                if (passenger.getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING
+                log.debug("userCommand: {}, passenger: {}", userCommand, passengerState);
+                if (getPassengerState().getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING
                         && elevator.getStateDelayQueue().size() == 0) {
                     throw new IllegalStateException("Internal error: The elevator is stuck");
                 }
@@ -228,13 +238,14 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
         }
 
         if (newState.getDoorsState() == DoorsState.OPENED) {
+            final PassengerState passenger = getPassengerState();
             Optional<Integer> passengerStandingFloor = passenger.getStandingFloor();
             if (passengerStandingFloor.isPresent()
                     && passengerStandingFloor.get().equals(newState.getFloor())
                     && passenger.getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING) {
                 // Going into the elevator as planned
                 userOutput.writeString("The passenger enters the elevator");
-                passenger.goIntoElevator(elevator);
+                changePassengerState(passenger.goIntoElevator(elevator));
             } else {
                 Optional<Elevator> passengerElevator = passenger.getElevator();
                 Optional<Integer> passengerTargetFloor = passenger.getTargetFloor();
@@ -244,12 +255,25 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                         && passengerTargetFloor.get().equals(newState.getFloor())) {
                     // Going out of the elevator as planned
                     userOutput.writeString("The passenger goes out of the elevator");
-                    passenger.goOutToFloor(newState.getFloor());
+                    changePassengerState(passenger.goOutToFloor(newState.getFloor()));
                 }
             }
         }
     }
 
+    @Nonnull
+    private PassengerState getPassengerState() {
+        return this.passengerState.peekFirst();
+    }
+
+    private void changePassengerState(@Nonnull final PassengerState newPassengerState) {
+        passengerState.addFirst(newPassengerState);
+        passengerState.removeLast();
+    }
+
+    /* ---------------------------------------------------------------
+     * MAIN
+     */
     public static void main(String[] args) {
         int exitCode;
         try (final ElevatorApp elevatorApp = new ElevatorApp(args)) {

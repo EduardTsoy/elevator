@@ -3,23 +3,31 @@ package com.example;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nonnull;
 import java.lang.invoke.MethodHandles;
 import java.util.Objects;
 import java.util.Optional;
 
-class Passenger {
+/**
+ * (Immutable)
+ */
+public class PassengerState {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    private Elevator elevator;
-    private Integer standingFloor;
-    private Integer targetFloor;
-    private PassengerStatus status;
+    private final Elevator elevator;
+    private final Integer standingFloor;
+    private final Integer targetFloor;
+    @Nonnull
+    private final PassengerStatus status;
 
-    public Passenger() {
-        elevator = null;
-        standingFloor = 1;
-        targetFloor = null;
-        status = PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING;
+    public PassengerState(final Elevator elevator,
+                          final Integer standingFloor,
+                          final Integer targetFloor,
+                          @Nonnull final PassengerStatus status) {
+        this.elevator = elevator;
+        this.standingFloor = standingFloor;
+        this.targetFloor = targetFloor;
+        this.status = status;
     }
 
     @Override
@@ -32,7 +40,7 @@ class Passenger {
                 '}';
     }
 
-    public void goIntoElevator(final Elevator elevator) {
+    public PassengerState goIntoElevator(final Elevator elevator) {
         log.debug("goIntoElevator()");
         final ElevatorState elevatorState = elevator.pollCurrentState();
         if (this.getElevator().isPresent()) {
@@ -49,27 +57,42 @@ class Passenger {
             throw new RuntimeException("Internal error:" +
                     " The passenger tried to go into the elevator, but its doors are not opened now");
         }
-        this.elevator = elevator;
-        standingFloor = null;
-        status = PassengerStatus.INSIDE_ELEVATOR;
+        return new PassengerState(
+                elevator,
+                null,
+                null,
+                PassengerStatus.INSIDE_ELEVATOR);
     }
 
-    public void memorizeTargetFloor(final int floor) {
-        log.debug("memorizeTargetFloor(" + floor + ")");
+    public PassengerState memorizeTargetFloor(final int targetFloor) {
+        log.debug("memorizeTargetFloor(" + targetFloor + ")");
         if (this.elevator == null) {
             throw new IllegalStateException(
                     "Internal error: Selecting a target floor outside of an elevator is not supported");
         }
-        this.targetFloor = floor;
+        return new PassengerState(
+                getElevator().orElseThrow(() -> new IllegalStateException("Internal error")),
+                getStandingFloor().orElse(null),
+                targetFloor,
+                getStatus());
     }
 
-    public void goOutToFloor(final int floor) {
+    public PassengerState goOutToFloor(final int floor) {
         log.debug("goOutToFloor(" + floor + ")");
-        this.standingFloor = floor;
-        this.elevator = null;
-        this.targetFloor = null;
-        status = PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING;
+        return new PassengerState(null, floor, null, PassengerStatus.OUTSIDE_ELEVATOR_NOT_WAITING);
     }
+
+    public PassengerState changeStatus(@Nonnull final PassengerStatus newStatus) {
+        return new PassengerState(
+                getElevator().orElse(null),
+                getStandingFloor().orElse(null),
+                getTargetFloor().orElse(null),
+                newStatus);
+    }
+
+    /*
+     * Getters, with Optional for nullable fields
+     */
 
     public Optional<Elevator> getElevator() {
         return Optional.ofNullable(elevator);
@@ -79,23 +102,12 @@ class Passenger {
         return Optional.ofNullable(standingFloor);
     }
 
-    public void setStandingFloor(final Integer standingFloor) {
-        this.standingFloor = standingFloor;
-    }
-
     public Optional<Integer> getTargetFloor() {
         return Optional.ofNullable(targetFloor);
     }
 
-    public void setTargetFloor(final Integer targetFloor) {
-        this.targetFloor = targetFloor;
-    }
-
+    @Nonnull
     public PassengerStatus getStatus() {
         return status;
-    }
-
-    public void setStatus(final PassengerStatus status) {
-        this.status = status;
     }
 }

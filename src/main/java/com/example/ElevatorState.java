@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import static com.example.Constants.NANOS_PER_SECOND;
 
 /**
- * (immutable)
+ * (Immutable)
  */
 public class ElevatorState implements Delayed {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
