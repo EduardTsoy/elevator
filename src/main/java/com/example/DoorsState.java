@@ -1,7 +1,7 @@
 package com.example;
 
 public enum DoorsState {
-    OPENED("doors are open"),
+    OPENED("doors are opened"),
     CLOSED("doors are closed");
 
     private final String description;

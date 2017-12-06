@@ -7,6 +7,8 @@ import java.io.OutputStreamWriter;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.lang.invoke.MethodHandles;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 
 class UserOutput implements AutoCloseable {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -25,16 +27,15 @@ class UserOutput implements AutoCloseable {
 
     public void writeString(final String message) {
         writer.flush();
-        writer.write(message + "\n");
+        writer.write("[" + LocalTime.now().truncatedTo(ChronoUnit.MILLIS) + "] " + message + "\n");
         writer.flush();
     }
 
     public void writeException(final Throwable e) {
-        log.debug("writeException() started...");
+        log.trace("writeException() started...");
         writer.flush();
         if (e != null) {
             if (e instanceof ElevatorException) {
-                log.warn("\n // " + e.getMessage());
                 writeString(e.getMessage());
             } else {
                 log.error("", e);
@@ -44,6 +45,6 @@ class UserOutput implements AutoCloseable {
             log.error("null");
         }
         writer.flush();
-        log.debug("...writeException() finished");
+        log.trace("...writeException() finished");
     }
 }

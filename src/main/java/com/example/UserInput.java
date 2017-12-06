@@ -41,11 +41,16 @@ public class UserInput implements AutoCloseable {
         public void run() {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    String s = reader.readLine();
-                    log.debug("\n // s: " + s);
-                    lines.add(s);
+                    Thread.sleep(10);
+                    if (reader.ready()) {
+                        final String s = reader.readLine();
+                        log.debug("\n // s: " + s);
+                        lines.add(s);
+                    }
                 } catch (final IOException e) {
                     log.debug("", e);
+                    throw new RuntimeException(e);
+                } catch (final InterruptedException e) {
                     throw new RuntimeException(e);
                 }
             }

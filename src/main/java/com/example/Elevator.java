@@ -3,17 +3,15 @@ package com.example;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nonnull;
 import java.lang.invoke.MethodHandles;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.DelayQueue;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.example.Constants.*;
-import static java.lang.Long.signum;
 
 public class Elevator {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -28,7 +26,8 @@ public class Elevator {
 
     private ElevatorState currentState;
     private final DelayQueue<ElevatorState> stateDelayQueue;
-    private final AtomicInteger targetFloor;
+    // private final AtomicInteger targetFloor; // TODO: remove
+    private final long nanosPerFloor;
 
     public Elevator(final int maxFloor,
                     final double height,
@@ -56,13 +55,14 @@ public class Elevator {
         }
         this.timeoutInNanos = (long) (timeoutInSeconds * NANOS_PER_SECOND);
 
-        targetFloor = new AtomicInteger();
+        // targetFloor = new AtomicInteger(); // TODO: remove
         stateDelayQueue = new DelayQueue<>();
-        stateDelayQueue.add(new ElevatorState(getCurrentInstant(), 5, DoorsState.CLOSED, 0.0f));
+        stateDelayQueue.add(new ElevatorState(getCurrentInstant(), 1, DoorsState.CLOSED, 0.0f));
 
         stateListeners = new ConcurrentLinkedQueue<>();
 
         log.debug("Created: " + this);
+        nanosPerFloor = (long) (NANOS_PER_SECOND * getHeight() / getSpeed());
     }
 
     private static Instant getCurrentInstant() {
@@ -79,16 +79,17 @@ public class Elevator {
                 '}';
     }
 
-    synchronized public ElevatorState pollCurrentState() {
+    synchronized
+    public ElevatorState pollCurrentState() {
         // log.debug("Elevator.pollCurrentState()");
         ElevatorState newState;
         while ((newState = stateDelayQueue.poll()) != null) {
-            newState(newState);
+            updateState(newState);
         }
         return currentState;
     }
 
-    synchronized public void newState(final ElevatorState newState) {
+    public void updateState(final ElevatorState newState) {
         log.debug("newCurrentState(" + newState + ")");
         final ElevatorState previousState = this.currentState;
         this.currentState = newState;
@@ -101,99 +102,220 @@ public class Elevator {
 
     public void callTo(final int targetFloor) {
         log.debug("Elevator.callTo(" + targetFloor + ")");
-        setTargetFloor(targetFloor);
-        programMovement();
+        // setTargetFloor(targetFloor); // TODO: remove
+        planMovement(targetFloor);
     }
 
     public void rideTo(final int targetFloor) {
         log.debug("Elevator.rideTo(" + targetFloor + ")");
-        setTargetFloor(targetFloor);
-        programMovement();
+        // setTargetFloor(targetFloor); // TODO: remove
+        planMovement(targetFloor);
     }
 
-    private void programMovement() {
-        log.debug("Elevator.programMovement() started...");
+    private enum Direction {
+        UP,
+        NEUTRAL,
+        DOWN;
 
-        final ElevatorState[] queued = new ElevatorState[stateDelayQueue.size()];
-        stateDelayQueue.toArray(queued);
-        Optional<ElevatorState> max = Arrays.stream(queued)
-                                            .max(Comparator.naturalOrder());
-        final ElevatorState tailState;
+        public static Direction of(final double d) {
+            final int signum = Constants.signum(d);
+            switch (signum) {
+                case -1:
+                    return DOWN;
+                case 0:
+                    return NEUTRAL;
+                case 1:
+                    return UP;
+                default:
+                    throw new IllegalStateException("Internal error: Unexpected result from our signum(): " + signum);
+            }
+        }
+
+        public static Direction of(final int n) {
+            final int signum = Integer.signum(n);
+            switch (signum) {
+                case -1:
+                    return DOWN;
+                case 0:
+                    return NEUTRAL;
+                case 1:
+                    return UP;
+                default:
+                    throw new IllegalStateException("Internal error: Unexpected result from Integer.signum(): " + signum);
+            }
+        }
+    }
+
+    synchronized
+    private void planMovement(final int targetFloor) {
+        log.trace("Elevator.planMovement() started...");
+
+        final ElevatorState currState = pollCurrentState();
+        final Direction wantedDirection = Direction.of(targetFloor - currState.getFloor());
+        // final Direction currDirection = Direction.of(currState.getSpeed());
+        final ElevatorState[] oldElementsArray = stateDelayQueue.toArray(new ElevatorState[stateDelayQueue.size()]);
+        final TreeMap<Integer, TreeSet<ElevatorState>> stateMapByFloor = new TreeMap<>();
+        Arrays.stream(oldElementsArray)
+              .forEach(element -> {
+                  stateMapByFloor.computeIfAbsent(element.getFloor(), k -> new TreeSet<>());
+                  stateMapByFloor.get(element.getFloor()).add(element);
+              });
+        final List<ElevatorState> newElements = new LinkedList<>();
+        final ElevatorState parentElement;
+        final Instant startTime;
         Instant plannedTime;
-        if (max.isPresent()) {
-            tailState = max.get();
-            plannedTime = max.get().getPlannedInstant();
-        } else {
-            tailState = pollCurrentState();
-            plannedTime = getCurrentInstant();
-        }
-        int programFloor = tailState.getFloor();
-        boolean addDoorsOpeningInTheEnd = true;
-        if (programFloor == getTargetFloor()) {
-            if (queued.length == 1
-                    && pollCurrentState().getDoorsState() == DoorsState.OPENED
-                    && tailState.getDoorsState() == DoorsState.CLOSED) {
-                final boolean removalResult = stateDelayQueue.remove(tailState);
-                if (removalResult) {
-                    log.debug("Removed the last future state successfully");
+        final boolean allDone = stateMapByFloor.containsKey(targetFloor)
+                && stateMapByFloor.get(targetFloor).stream()
+                                  .anyMatch(state -> state.getDoorsState() == DoorsState.OPENED);
+        log.debug("allDone: " + allDone);
+        if (!allDone) {
+            switch (wantedDirection) {
+                case UP:
+                    if (!stateMapByFloor.isEmpty() && stateMapByFloor.containsKey(targetFloor)) {
+                        log.debug("parentElement = stateMapByFloor.get(targetFloor).last()");
+                        parentElement = stateMapByFloor.get(targetFloor).last();
+                    } else if (!stateMapByFloor.isEmpty() && !stateMapByFloor.lastEntry().getValue().isEmpty()) {
+                        log.debug("parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get()");
+                        parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get();
+                    } else {
+                        log.debug("parentElement = currState");
+                        parentElement = currState;
+                    }
+                    plannedTime = startTime = Constants.max(parentElement.getPlannedInstant(), getCurrentInstant());
+                    plannedTime = internalGoUpwards(parentElement.getFloor(), targetFloor, newElements, plannedTime);
+                    plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
+                    if (isAnyoneLater(oldElementsArray, startTime)) {
+                        plannedTime = internalGoDownwards(
+                                targetFloor, parentElement.getFloor(), newElements, plannedTime);
+                    }
+                    break;
+                case NEUTRAL:
+                    parentElement = currState;
+                    plannedTime = startTime = getCurrentInstant();
+                    plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
+                    break;
+                case DOWN:
+                    if (!stateMapByFloor.isEmpty() && stateMapByFloor.containsKey(targetFloor)) {
+                        log.debug("parentElement = stateMapByFloor.get(targetFloor).last()");
+                        parentElement = stateMapByFloor.get(targetFloor).last();
+                    } else if (oldElementsArray.length > 0) {
+                        log.debug("parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get()");
+                        parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get();
+                    } else {
+                        log.debug("parentElement = currState");
+                        parentElement = currState;
+                    }
+                    plannedTime = startTime = Constants.max(parentElement.getPlannedInstant(), getCurrentInstant());
+                    plannedTime = internalGoDownwards(parentElement.getFloor(), targetFloor, newElements, plannedTime);
+                    plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
+                    if (isAnyoneLater(oldElementsArray, startTime)) {
+                        plannedTime = internalGoUpwards(
+                                targetFloor, parentElement.getFloor(), newElements, plannedTime);
+                    }
+                    break;
+                default:
+                    throw new IllegalStateException("Internal error: Unexpected value of Durection enum: " + wantedDirection);
+            }
+
+            final Instant finishTime = plannedTime.plusNanos(1);
+            final Duration addedDuration = Duration.between(startTime, finishTime);
+            final List<ElevatorState> oldElements = Arrays.asList(oldElementsArray);
+            oldElements.forEach(oldElement -> {
+                if (oldElement.getPlannedInstant().compareTo(startTime) > 0) {
+                    final ElevatorState rescheduled = new ElevatorState(
+                            oldElement.getPlannedInstant()
+                                      .plus(addedDuration),
+                            oldElement.getFloor(),
+                            oldElement.getDoorsState(),
+                            oldElement.getSpeed()
+                    );
+                    newElements.add(rescheduled);
+                    log.debug("postpone an element to a later moment: {}", rescheduled);
+                } else {
+                    newElements.add(oldElement);
                 }
-            } else if (queued.length >= 2) {
-                addDoorsOpeningInTheEnd = false;
-            }
-        } else {
-            final double plannedSpeed = (programFloor < getTargetFloor())
-                                        ? getSpeed()
-                                        : -getSpeed();
-            final long nanosPerFloor = (long) (NANOS_PER_SECOND * getHeight() / getSpeed());
-            final int timeSignum = signum(nanosPerFloor);
-            if (timeSignum < 0) { // Sanity checks
-                throw new IllegalStateException("Internal error: The elevator movement time per floor is negative");
-            } else if (timeSignum == 0) {
-                throw new IllegalStateException("Internal error: The elevator movement time per floor is zero");
-            }
-            final int plusOneOrMinusOne = Constants.signum(plannedSpeed);
-            while (programFloor != getTargetFloor()) {
-                if (programFloor < getMinFloor() || programFloor > getMaxFloor()) {
-                    throw new IllegalStateException("Internal error: The elevator supposedly went in a wrong direction");
-                }
-                plannedTime = plannedTime.plusNanos(nanosPerFloor);
-                stateDelayQueue.add(new ElevatorState(
-                        plannedTime, programFloor, DoorsState.CLOSED, plannedSpeed));
-                programFloor += plusOneOrMinusOne;
-            }
-            plannedTime = plannedTime.plusNanos(1);
-            stateDelayQueue.add(new ElevatorState(
-                    plannedTime, programFloor, DoorsState.CLOSED, 0.0d));
+            });
+            stateDelayQueue.clear();
+            stateDelayQueue.addAll(newElements);
         }
-        if (addDoorsOpeningInTheEnd) {
-            plannedTime = plannedTime.plusMillis(DOORS_OPENING_TIME_IN_MILLIS)
-                                     .plusNanos(1); // It is important to add at least 1 nanosecond for proper sorting
-            stateDelayQueue.add(new ElevatorState(
-                    plannedTime, programFloor, DoorsState.OPENED, 0.0d));
-            plannedTime = plannedTime.plusNanos(getTimeoutInNanos());
-            stateDelayQueue.add(new ElevatorState(
-                    plannedTime, programFloor, DoorsState.CLOSED, 0.0d));
-        }
-        log.debug("...Elevator.programMovement() finished");
+        log.trace("...Elevator.planMovement() finished");
     }
 
-    public double getTimeoutInSeconds() {
-        return (double) timeoutInNanos / NANOS_PER_SECOND;
+    private boolean isAnyoneLater(@Nonnull final ElevatorState[] oldElementsArray,
+                                  @Nonnull final Instant startTime) {
+        final boolean result = Arrays.stream(oldElementsArray).anyMatch(old -> old.getPlannedInstant()
+                                                                                  .compareTo(startTime) > 0);
+        log.debug("isAnyoneLater({}, {}) returns: {}", oldElementsArray.length, startTime, result);
+        return result;
+    }
+
+    private Instant internalGoUpwards(final int fromFloor,
+                                      final int toFloor,
+                                      @Nonnull final List<ElevatorState> newElements,
+                                      @Nonnull Instant plannedTime) {
+        log.debug("internalGoUpwards({}, {}, {}, {})",
+                fromFloor, toFloor, newElements.size(), plannedTime);
+        for (int i = fromFloor; i <= toFloor; i++) {
+            plannedTime = plannedTime.plusNanos(nanosPerFloor);
+            newElements.add(new ElevatorState(plannedTime, i, DoorsState.CLOSED,
+                    (i == toFloor) ? 0.0d : getSpeed()));
+        }
+        return plannedTime;
+    }
+
+    private Instant internalGoDownwards(final int fromFloor,
+                                        final int toFloor,
+                                        @Nonnull final List<ElevatorState> newElements,
+                                        @Nonnull Instant plannedTime) {
+        log.debug("internalGoDownwards({}, {}, {}, {})",
+                fromFloor, toFloor, newElements.size(), plannedTime);
+        for (int i = fromFloor - 1; i >= toFloor; i--) {
+            plannedTime = plannedTime.plusNanos(nanosPerFloor);
+            newElements.add(new ElevatorState(plannedTime, i, DoorsState.CLOSED,
+                    -getSpeed()));
+        }
+        return plannedTime;
+    }
+
+    private Instant internalOpenDoors(final int targetFloor,
+                                      @Nonnull final List<ElevatorState> newElements,
+                                      @Nonnull Instant plannedTime) {
+        log.debug("internalOpenDoors({}, {}, {})",
+                targetFloor, newElements.size(), plannedTime);
+        plannedTime = plannedTime.plusNanos(Constants.DOORS_OPENING_TIME_IN_MILLIS)
+                                 .plusNanos(1); // Time must be different by at least one nanosecond - for sorting
+        newElements.add(new ElevatorState(
+                plannedTime, targetFloor, DoorsState.OPENED,
+                0.0d));
+        plannedTime = plannedTime.plusNanos(getTimeoutInNanos())
+                                 .plusNanos(1);
+        newElements.add(new ElevatorState(
+                plannedTime, targetFloor, DoorsState.CLOSED,
+                0.0d));
+        return plannedTime;
     }
 
     /*
-     * Special getters and setters for atomic fields of Elevator class
+     * Special getters and setters
      */
 
+    /*
+     // TODO: remove
     public int getTargetFloor() {
         return targetFloor.get();
     }
 
+    // TODO: remove
     public void setTargetFloor(final int targetFloor) {
         if (targetFloor < getMinFloor() || targetFloor > getMaxFloor()) {
             throw new ElevatorException("Sorry, there is no floor # " + targetFloor + " here.");
         }
         this.targetFloor.set(targetFloor);
+    }
+    */
+
+    public double getTimeoutInSeconds() {
+        return (double) timeoutInNanos / NANOS_PER_SECOND;
     }
 
     /* -------------------------------------

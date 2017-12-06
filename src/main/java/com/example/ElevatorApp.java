@@ -147,8 +147,9 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
         try {
             String userCommand = null;
             do {
-                Thread.sleep(10);
                 try {
+                    Thread.sleep(10);
+                    userCommand = userInput.nextLine();
                     if (userCommand != null) {
                         userCommand = userCommand.toLowerCase();
                         final ElevatorState elevatorState = elevator.pollCurrentState();
@@ -169,8 +170,8 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                                     userOutput.writeString("The passenger urgently enters the elevator");
                                     changePassengerState(passenger.goIntoElevator(elevator));
                                 } else {
-                                    userOutput.writeString(
-                                            "The passenger called an elevator from the floor# " + passengerFloor.get());
+                                    userOutput.writeString("The passenger called an elevator" +
+                                            " from the floor # " + passengerFloor.get());
                                     elevator.callTo(passengerFloor.get());
                                     changePassengerState(passenger
                                             .changeStatus(PassengerStatus.OUTSIDE_ELEVATOR_WAITING));
@@ -201,15 +202,14 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                                         "Internal error: Unknown passenger status:" + passenger.getStatus());
                         }
                     }
+                    elevator.pollCurrentState();
+                    // log.debug("userCommand: {}, passenger: {}", userCommand, passengerState);
+                    if (getPassengerState().getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING
+                            && elevator.getStateDelayQueue().size() == 0) {
+                        throw new IllegalStateException("Internal error: The elevator is stuck");
+                    }
                 } catch (final ElevatorException e) {
                     userOutput.writeException(e);
-                }
-                elevator.pollCurrentState();
-                userCommand = userInput.nextLine();
-                log.debug("userCommand: {}, passenger: {}", userCommand, passengerState);
-                if (getPassengerState().getStatus() == PassengerStatus.OUTSIDE_ELEVATOR_WAITING
-                        && elevator.getStateDelayQueue().size() == 0) {
-                    throw new IllegalStateException("Internal error: The elevator is stuck");
                 }
             } while (!(("exit".equals(userCommand) ||
                     "quit".equals(userCommand) ||
@@ -226,7 +226,7 @@ public class ElevatorApp implements Callable<Integer>, AutoCloseable {
                               final ElevatorState newState) {
         switch (Constants.compareDoubles(newState.getSpeed(), 0.0f)) {
             case 0:
-                userOutput.writeString("The elevator is at floor # " + newState.getFloor() +
+                userOutput.writeString("The elevator is at the floor # " + newState.getFloor() +
                         ", " + newState.getDoorsState().getDescription());
                 break;
             case -1:

@@ -20,12 +20,13 @@ import static com.example.Constants.NANOS_PER_SECOND;
 public class ElevatorState implements Delayed {
     private final static Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
+    @Nonnull
     private final Instant plannedInstant;
     private final int floor;
     private final DoorsState doorsState;
     private final double speed;
 
-    public ElevatorState(final Instant plannedInstant,
+    public ElevatorState(@Nonnull final Instant plannedInstant,
                          final int floor,
                          final DoorsState doorsState,
                          final double speed) {
@@ -132,9 +133,9 @@ public class ElevatorState implements Delayed {
     }
 
     @Override
-    public int compareTo(final Delayed that) {
+    public int compareTo(@Nonnull final Delayed that) {
         int result = Long.compare(this.getDelay(TimeUnit.NANOSECONDS), that.getDelay(TimeUnit.NANOSECONDS));
-        if (result == 0) {
+        if (result == 0 && this != that) { // yes, comparing objects by their memory address is exactly what is needed here
             log.warn("These states are planned for exactly the same instant of time (equal even in nanos):" +
                     "\n // " + this +
                     "\n // " + that);
@@ -146,6 +147,7 @@ public class ElevatorState implements Delayed {
      * Getters
      */
 
+    @Nonnull
     public Instant getPlannedInstant() {
         return plannedInstant;
     }
