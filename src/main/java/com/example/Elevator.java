@@ -93,6 +93,12 @@ public class Elevator {
 
     public void updateState(final ElevatorState newState) {
         log.debug("newCurrentState(" + newState + ")");
+        if (newState.getFloor() > getMaxFloor()) {
+            throw new ElevatorException("" + newState.getFloor() + " exceeds " + getMaxFloor() + " max limit.");
+        }
+        if (newState.getFloor() < getMinFloor()) {
+            throw new ElevatorException("" + newState.getFloor() + " is below " + getMaxFloor() + "minimum limit.");
+        }
         currentState.addFirst(newState);
         final ElevatorState previousState = currentState.removeLast();
         stateListeners.forEach(listener -> listener.stateChanged(previousState, newState));
