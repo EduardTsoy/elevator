@@ -1,1 +1,2 @@
-# elevator
+# Elevator simulation
+##### (coding challenge)
