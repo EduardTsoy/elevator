@@ -8,6 +8,7 @@ import java.lang.invoke.MethodHandles;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.DelayQueue;
 
@@ -24,9 +25,8 @@ public class Elevator {
     private final double speed; // in meters per second; acceleration and deceleration are ignored in our simulation
     private final long timeoutInNanos; // time period between opening and closing the doors, in nanoseconds;
 
-    private ElevatorState currentState;
+    private final ConcurrentLinkedDeque<ElevatorState> currentState;
     private final DelayQueue<ElevatorState> stateDelayQueue;
-    // private final AtomicInteger targetFloor; // TODO: remove
     private final long nanosPerFloor;
 
     public Elevator(final int maxFloor,
@@ -55,9 +55,12 @@ public class Elevator {
         }
         this.timeoutInNanos = (long) (timeoutInSeconds * NANOS_PER_SECOND);
 
-        // targetFloor = new AtomicInteger(); // TODO: remove
+        final ElevatorState currState = new ElevatorState(getCurrentInstant(), 1, DoorsState.CLOSED, 0.0f);
         stateDelayQueue = new DelayQueue<>();
-        stateDelayQueue.add(new ElevatorState(getCurrentInstant(), 1, DoorsState.CLOSED, 0.0f));
+        stateDelayQueue.add(currState);
+
+        currentState = new ConcurrentLinkedDeque<>();
+        currentState.addFirst(currState);
 
         stateListeners = new ConcurrentLinkedQueue<>();
 
@@ -81,18 +84,17 @@ public class Elevator {
 
     synchronized
     public ElevatorState pollCurrentState() {
-        // log.debug("Elevator.pollCurrentState()");
         ElevatorState newState;
         while ((newState = stateDelayQueue.poll()) != null) {
             updateState(newState);
         }
-        return currentState;
+        return currentState.getFirst();
     }
 
     public void updateState(final ElevatorState newState) {
         log.debug("newCurrentState(" + newState + ")");
-        final ElevatorState previousState = this.currentState;
-        this.currentState = newState;
+        currentState.addFirst(newState);
+        final ElevatorState previousState = currentState.removeLast();
         stateListeners.forEach(listener -> listener.stateChanged(previousState, newState));
     }
 
@@ -102,13 +104,11 @@ public class Elevator {
 
     public void callTo(final int targetFloor) {
         log.debug("Elevator.callTo(" + targetFloor + ")");
-        // setTargetFloor(targetFloor); // TODO: remove
         planMovement(targetFloor);
     }
 
     public void rideTo(final int targetFloor) {
         log.debug("Elevator.rideTo(" + targetFloor + ")");
-        // setTargetFloor(targetFloor); // TODO: remove
         planMovement(targetFloor);
     }
 
@@ -150,12 +150,19 @@ public class Elevator {
     private void planMovement(final int targetFloor) {
         log.trace("Elevator.planMovement() started...");
 
+        if (targetFloor > getMaxFloor()) {
+            throw new ElevatorException("Sorry, we only have " + getMaxFloor() + " floors.");
+        }
+        if (targetFloor < getMinFloor()) {
+            throw new ElevatorException("Sorry, our lowest floor is # " + getMaxFloor() + ".");
+        }
         final ElevatorState currState = pollCurrentState();
         final Direction wantedDirection = Direction.of(targetFloor - currState.getFloor());
-        // final Direction currDirection = Direction.of(currState.getSpeed());
-        final ElevatorState[] oldElementsArray = stateDelayQueue.toArray(new ElevatorState[stateDelayQueue.size()]);
+        final ElevatorState[] sortedOldElementsArray =
+                stateDelayQueue.toArray(new ElevatorState[stateDelayQueue.size()]);
+        Arrays.sort(sortedOldElementsArray);
         final TreeMap<Integer, TreeSet<ElevatorState>> stateMapByFloor = new TreeMap<>();
-        Arrays.stream(oldElementsArray)
+        Arrays.stream(sortedOldElementsArray)
               .forEach(element -> {
                   stateMapByFloor.computeIfAbsent(element.getFloor(), k -> new TreeSet<>());
                   stateMapByFloor.get(element.getFloor()).add(element);
@@ -174,9 +181,23 @@ public class Elevator {
                     if (!stateMapByFloor.isEmpty() && stateMapByFloor.containsKey(targetFloor)) {
                         log.debug("parentElement = stateMapByFloor.get(targetFloor).last()");
                         parentElement = stateMapByFloor.get(targetFloor).last();
-                    } else if (!stateMapByFloor.isEmpty() && !stateMapByFloor.lastEntry().getValue().isEmpty()) {
-                        log.debug("parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get()");
-                        parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get();
+                    } else if (sortedOldElementsArray.length > 0) {
+                        log.debug("selecting the highest");
+                        int direction = 0;
+                        int indexOfHighest = sortedOldElementsArray.length - 1;
+                        for (int i = 0; i < sortedOldElementsArray.length; i++) {
+                            final ElevatorState element = sortedOldElementsArray[i];
+                            final int signum = signum(element.getSpeed());
+                            if (signum != 0) {
+                                direction = signum;
+                            }
+                            if (direction == 1 &&
+                                    Integer.compare(element.getFloor(),
+                                            sortedOldElementsArray[indexOfHighest].getFloor()) > 0) {
+                                indexOfHighest = i;
+                            }
+                        }
+                        parentElement = sortedOldElementsArray[indexOfHighest];
                     } else {
                         log.debug("parentElement = currState");
                         parentElement = currState;
@@ -184,7 +205,7 @@ public class Elevator {
                     plannedTime = startTime = Constants.max(parentElement.getPlannedInstant(), getCurrentInstant());
                     plannedTime = internalGoUpwards(parentElement.getFloor(), targetFloor, newElements, plannedTime);
                     plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
-                    if (isAnyoneLater(oldElementsArray, startTime)) {
+                    if (isAnyoneLater(sortedOldElementsArray, startTime)) {
                         plannedTime = internalGoDownwards(
                                 targetFloor, parentElement.getFloor(), newElements, plannedTime);
                     }
@@ -195,12 +216,36 @@ public class Elevator {
                     plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
                     break;
                 case DOWN:
+                    final Optional<ElevatorState> mostDownwards =
+                            Arrays.stream(sortedOldElementsArray)
+                                  .filter(element -> Constants.signum(element.getSpeed()) >= 0)
+                                  .max((o1, o2) -> {
+                                      final int cmp = Integer.compare(o1.getFloor(), o2.getFloor());
+                                      if (cmp != 0) {
+                                          return -cmp; // reverse sorting by floor
+                                      }
+                                      return o1.getPlannedInstant().compareTo(o2.getPlannedInstant());
+                                  });
                     if (!stateMapByFloor.isEmpty() && stateMapByFloor.containsKey(targetFloor)) {
                         log.debug("parentElement = stateMapByFloor.get(targetFloor).last()");
                         parentElement = stateMapByFloor.get(targetFloor).last();
-                    } else if (oldElementsArray.length > 0) {
-                        log.debug("parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get()");
-                        parentElement = Arrays.stream(oldElementsArray).max(Comparator.naturalOrder()).get();
+                    } else if (sortedOldElementsArray.length > 0) {
+                        log.debug("selecting the lowest");
+                        int direction = 0;
+                        int indexOfLowest = sortedOldElementsArray.length - 1;
+                        for (int i = 0; i < sortedOldElementsArray.length; i++) {
+                            final ElevatorState element = sortedOldElementsArray[i];
+                            final int signum = signum(element.getSpeed());
+                            if (signum != 0) {
+                                direction = signum;
+                            }
+                            if (direction == -1 &&
+                                    Integer.compare(element.getFloor(),
+                                            sortedOldElementsArray[indexOfLowest].getFloor()) < 0) {
+                                indexOfLowest = i;
+                            }
+                        }
+                        parentElement = sortedOldElementsArray[indexOfLowest];
                     } else {
                         log.debug("parentElement = currState");
                         parentElement = currState;
@@ -208,7 +253,7 @@ public class Elevator {
                     plannedTime = startTime = Constants.max(parentElement.getPlannedInstant(), getCurrentInstant());
                     plannedTime = internalGoDownwards(parentElement.getFloor(), targetFloor, newElements, plannedTime);
                     plannedTime = internalOpenDoors(targetFloor, newElements, plannedTime);
-                    if (isAnyoneLater(oldElementsArray, startTime)) {
+                    if (isAnyoneLater(sortedOldElementsArray, startTime)) {
                         plannedTime = internalGoUpwards(
                                 targetFloor, parentElement.getFloor(), newElements, plannedTime);
                     }
@@ -219,7 +264,7 @@ public class Elevator {
 
             final Instant finishTime = plannedTime.plusNanos(1);
             final Duration addedDuration = Duration.between(startTime, finishTime);
-            final List<ElevatorState> oldElements = Arrays.asList(oldElementsArray);
+            final List<ElevatorState> oldElements = Arrays.asList(sortedOldElementsArray);
             oldElements.forEach(oldElement -> {
                 if (oldElement.getPlannedInstant().compareTo(startTime) > 0) {
                     final ElevatorState rescheduled = new ElevatorState(
@@ -283,7 +328,7 @@ public class Elevator {
         log.debug("internalOpenDoors({}, {}, {})",
                 targetFloor, newElements.size(), plannedTime);
         plannedTime = plannedTime.plusNanos(Constants.DOORS_OPENING_TIME_IN_MILLIS)
-                                 .plusNanos(1); // Time must be different by at least one nanosecond - for sorting
+                                 .plusNanos(1); // we need a difference by at least one nanosecond - for sorting
         newElements.add(new ElevatorState(
                 plannedTime, targetFloor, DoorsState.OPENED,
                 0.0d));
@@ -294,25 +339,6 @@ public class Elevator {
                 0.0d));
         return plannedTime;
     }
-
-    /*
-     * Special getters and setters
-     */
-
-    /*
-     // TODO: remove
-    public int getTargetFloor() {
-        return targetFloor.get();
-    }
-
-    // TODO: remove
-    public void setTargetFloor(final int targetFloor) {
-        if (targetFloor < getMinFloor() || targetFloor > getMaxFloor()) {
-            throw new ElevatorException("Sorry, there is no floor # " + targetFloor + " here.");
-        }
-        this.targetFloor.set(targetFloor);
-    }
-    */
 
     public double getTimeoutInSeconds() {
         return (double) timeoutInNanos / NANOS_PER_SECOND;
